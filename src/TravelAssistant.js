@@ -111,55 +111,69 @@ const TravelAssistant = () => {
     setInput('');
     setLoading(true);
 
-    try {
-      const response = await axios.post(
-        'api/v1/services/aigc/text-generation/generation',
-        {
-          model: 'qwen1.5-110b-chat',
-          input: {
+    const maxRetries = 5;
+    let retries = 0;
+
+    const retryWithExponentialBackoff = async (retryCount) => {
+      try {
+        const response = await axios.post(
+          'https://leave0421.x1340128837.workers.dev/v1/chat/completions',
+          {
+            model: 'qwen2.5-72b-instruct',
             messages: [
-              { role: 'system', content: `你是一位专业的旅行行程规划师，擅长制定小红书风格的旅行攻略。请根据用户提供的出发地、目的地、人数和天数，制定详细的旅行行程计划。你的回答应包含以下内容：
-
-1. 交通方案：提供从出发地到目的地的合适、便捷的交通选择，包括飞机、高铁、火车等，优先推荐速度最快的交通方式，并给出大致时间及价格。
-
-2. 住宿推荐：推荐当地热门的酒店或民宿,避免推荐青年旅社，分为经济型和舒适型两个档次，每个档次至少推荐2-3个选择，并给出价格范围，需给出对应住宿地点的详细位置。
-
-3. 热门景点：列出5-8个当地最受欢迎的景点，简要介绍特色和门票价格，并且需给出景点详细位置并给出推荐理由。
-
-4. 美食推荐：推荐5-8种当地特色美食或网红餐厅，提供价格参考，并且需给出美食地点详细位置并给出推荐理由。
-
-5. 每日行程安排：
-   - 为每一天制定两套方案：经济型和舒适型
-   - 详细列出上午、下午和晚上的活动
-   - 包括根据活动地点给出就餐建议和预计花费
-   - 考虑景点之间的距离和游览时间
-
-6. 每日费用预算：分别计算经济型和舒适型方案的每日预算。
-
-7. 总费用估算：分别计算济型和舒适型方案总费用，包括交通、住宿、餐饮、门票和其他开支。
-
-请以小红书的风格呈现内容，采用标题、加粗、列表等格式让内容更加美观易读。根据标题和内容需要适当的添加适配的emoji，最后，给出一些实用的旅行小贴士。无需回复任何和旅行不相关的内容` },
+              { role: 'system', content: `你是专业旅行规划师。请为下列信息制定小红书风格攻略:
+                * 出发地
+                * 目的地
+                * 人数
+                * 天数
+                需包含:
+                1. 交通方式:最快2种交通方式、时间、价格
+                2. 住宿推荐:经济/舒适型各2-3家，含位置、价格，避开青年旅社
+                3. 景点打卡:5-8个重点景点介绍，含位置、价格
+                4. 美食打卡:5-8个特色推荐，含位置、价格
+                5. 具体日程:经济/舒适两版，含具体时间安排和具体行程内容安排，含位置、价格
+                6. 预算:两种方案总费用明细无需回复任何和旅行不相关的内容。` },
               { role: 'user', content: input }
-            ]
+            ],
+            temperature: 0.7,
+            max_tokens: 8196,
+            top_p: 0.8,
+            stream: false
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            timeout: 2500000,
+            withCredentials: false
           }
-        },
-        {
-          headers: {
-            'Authorization': 'Bearer sk-7263b1f9500644bf97ec1910ac4a982b',
-            'Content-Type': 'application/json'
+        );
+
+        console.log('API Response:', response.data);
+        const aiMessage = { type: 'ai', content: formatAIResponse(response.data.choices[0].message.content) };
+        setMessages([...messages, userMessage, aiMessage]);
+      } catch (error) {
+        console.error('Error:', error);
+        if (retryCount < maxRetries) {
+          const delay = Math.pow(2, retryCount) * 1000; // 指数退避
+          console.log(`重试第 ${retryCount + 1} 次，等待 ${delay / 1000} 秒...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          await retryWithExponentialBackoff(retryCount + 1);
+        } else {
+          let errorMessage = { type: 'ai', content: '抱歉，服务器暂时无法响应。请稍后再试。' };
+          if (error.response) {
+            errorMessage = { type: 'ai', content: `抱歉，服务器返回了错误：${error.response.status} - ${error.response.data?.error || '未知错误'}` };
+          } else if (error.request) {
+            errorMessage = { type: 'ai', content: '网络连接出现问题。请检查您的网络连接并重试。' };
+          } else if (error.message && error.message.includes('Network Error')) {
+            errorMessage = { type: 'ai', content: '网络错误。请检查您的网络连接或联系服务器管理员。' };
           }
+          setMessages([...messages, userMessage, errorMessage]);
         }
-      );
+      }
+    };
 
-      console.log('API Response:', response.data);
-      const aiMessage = { type: 'ai', content: formatAIResponse(response.data.output.text || response.data.choices[0].message.content) };
-      setMessages([...messages, userMessage, aiMessage]);
-    } catch (error) {
-      console.error('Error:', error);
-      const errorMessage = { type: 'ai', content: '抱歉，我遇到了一些问题。请稍后再试。' };
-      setMessages([...messages, userMessage, errorMessage]);
-    }
-
+    await retryWithExponentialBackoff(0);
     setLoading(false);
   };
 
@@ -198,7 +212,7 @@ const TravelAssistant = () => {
               loading={loading}
               className="send-button"
             >
-              {loading ? '寻找最佳方案...请耐心等待' : '发送'}
+              {loading ? `寻找最佳方案...请耐心等待（${loadingTime}秒）` : '发送'}
             </Button>
           }
         />
