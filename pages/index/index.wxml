@@ -1,0 +1,52 @@
+<view class="container">
+  <view class="header">
+    <text class="title">旅行规划助手</text>
+    <image class="logo" src="/images/travel-icon.png" mode="aspectFit" />
+  </view>
+  
+  <scroll-view 
+    scroll-y 
+    class="message-list" 
+    scroll-into-view="{{lastMessageId}}"
+    scroll-with-animation>
+    <block wx:if="{{messages && messages.length}}">
+      <view 
+      wx:for="{{messages}}" 
+      wx:key="index"
+      id="msg-{{index}}"
+      class="message-wrapper {{item.type === 'user' ? 'user-wrapper' : 'ai-wrapper'}}">
+      <view class="avatar {{item.type === 'user' ? 'user' : 'ai'}}"></view>
+      <view class="message-bubble {{item.type === 'user' ? 'user-bubble' : 'ai-bubble'}}">
+        <text class="message-text" user-select="true">{{item.content}}</text>
+      </view>
+    </view>
+    </block>
+    
+    <view class="welcome-card" wx:else>
+      <view class="card-title">欢迎使用旅行规划助手!</view>
+      <view class="card-text">告诉我您的旅行计划，我将为您定制完美的行程。</view>
+      
+      <view class="tips">
+        <view class="tip-item">
+          <image class="tip-icon" src="/images/location-icon.png" mode="aspectFit" />
+          <text>输入您的出发地和目的地</text>
+        </view>
+        <view class="tip-item">
+          <image class="tip-icon" src="/images/people-icon.png" mode="aspectFit" />
+          <text>告诉我旅行的人数和天数</text>
+        </view>
+        <view class="tip-item">
+          <image class="tip-icon" src="/images/plan-icon.png" mode="aspectFit" />
+          <text>我会为您规划交通、住宿、景点和美食</text>
+        </view>
+      </view>
+    </view>
+  </scroll-view>
+  
+  <view class="input-area">
+    <input class="input-field" placeholder="例如：北京到三亚，2人，3天" bindinput="inputChange" value="{{input}}" />
+    <button class="send-button" bindtap="sendMessage" loading="{{loading}}">
+      <image class="send-icon" src="/images/send-icon.png" mode="aspectFit" wx:if="{{!loading}}" />
+    </button>
+  </view>
+</view>
