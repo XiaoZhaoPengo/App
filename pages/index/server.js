@@ -1,50 +1,30 @@
+// 安装依赖: npm init -y  npm install express node-fetch http https https-proxy-agent
+// npm install node-fetch@2 https-proxy-agent
 const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
-const https = require('https');
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
-const path = require('path');
 const { HttpsProxyAgent } = require('https-proxy-agent');
-const NodeCache = require('node-cache');
-const compression = require('compression');
-
+const fetch = require('node-fetch');
 const app = express();
-const cache = new NodeCache({ stdTTL: 600, checkperiod: 120 });
 
-// 证书路径配置 - Windows版本
-const CERT_PATH = 'C:\Users\Administrator\Desktop\Certificates'; // 创建这个目录并把证书文件放在这里
-let httpsServer;
-
-try {
-    // SSL证书配置
-    const SSL_OPTIONS = {
-        key: fs.readFileSync(path.join(CERT_PATH, 'private.key')),
-        cert: fs.readFileSync(path.join(CERT_PATH, 'certificate.crt'))
-    };
-    
-    // 创建HTTPS服务器
-    httpsServer = https.createServer(SSL_OPTIONS, app);
-} catch (error) {
-    console.error('SSL证书加载失败，将以HTTP模式运行:', error);
-}
+// 添加 JSON 解析中间件
+app.use(express.json());
 
 // API Keys
 const API_KEY = "sk-1234567890";
 const HUGGINGFACE_API_KEY = "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";
 
-// 代理设置 - 设置是否使用代理
-const USE_PROXY = true;
-const PROXY_HOST = '127.0.0.1';
-const PROXY_PORT = '7890';
+// SSL证书配置
+const options = {
+    key: fs.readFileSync('./pem/www.leavel.top.key'),  // 替换为您的.key文件名
+    cert: fs.readFileSync('./pem/www.leavel.top.pem')  // 替换为您的.pem文件名
+};
 
-// 根据设置创建代理
-const httpsAgent = USE_PROXY ? new HttpsProxyAgent(`http://${PROXY_HOST}:${PROXY_PORT}`) : undefined;
-
-// Available models mapping
+// 可用模型映射
 const CUSTOMER_MODEL_MAP = {
     "qwen2.5-72b-instruct": "Qwen/Qwen2.5-72B-Instruct",
-    "gemma2-2b-it": "google/gemma-2-2b-it",
+    "gemma2-2b-it": "google/gemma-2-2b-it", 
     "gemma2-27b-it": "google/gemma-2-27b-it",
     "llama-3-8b-instruct": "meta-llama/Meta-Llama-3-8B-Instruct",
     "llama-3.2-1b-instruct": "meta-llama/Llama-3.2-1B-Instruct",
@@ -52,217 +32,177 @@ const CUSTOMER_MODEL_MAP = {
     "phi-3.5": "microsoft/Phi-3.5-mini-instruct"
 };
 
-// 预设的系统消息
-const SYSTEM_MESSAGE = {
-    "role": "system",
-    "content": "你是专业旅行规划师。请为下列信息制定小红书风格攻略:* 出发地* 目的地人数天数 需包含: 1. 交通方式:最快2种交通方式、时间、价格 2. 住宿推荐:经济/舒适型各2-3家，含位置、价格，避开青年旅社3. 景点打卡:5-8个重点景点介绍，含位置、价格4. 美食打卡:5-8个特色推荐，含位置、价格5. 具体日程:经济/舒适两版，含具体时间安排和具体行程内容安排，含位置、价格6. 预算:两种方案总费用明细。"
-};
-
-// Middleware setup
-app.use(compression());
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    maxAge: 86400,
-}));
-app.use(express.json({ limit: '10mb' }));
-
-// 添加安全相关的头部
+// CORS 中间件
 app.use((req, res, next) => {
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "*");
+    res.header("Access-Control-Allow-Headers", "*");
+    res.header("Access-Control-Max-Age", "86400");
+    
+    if (req.method === "OPTIONS") {
+        return res.status(200).end();
+    }
     next();
 });
 
-// Configure axios defaults
-const axiosInstance = axios.create({
-    timeout: 300000,
-    maxBodyLength: Infinity,
-    maxContentLength: Infinity,
-});
-
-// Models endpoint
+// API路由配置
 app.get('/v1/models', (req, res) => {
-    const cachedModels = cache.get('models');
-    if (cachedModels) {
-        return res.json(cachedModels);
-    }
-
-    const models = Object.keys(CUSTOMER_MODEL_MAP).map(id => ({
-        id,
-        object: "model"
+    const arrs = Object.keys(CUSTOMER_MODEL_MAP).map(element => ({ 
+        id: element, 
+        object: "model" 
     }));
-
-    const response = {
-        data: models,
+    res.json({
+        data: arrs,
         success: true
-    };
-
-    cache.set('models', response);
-    res.json(response);
+    });
 });
 
-// Chat completions endpoint
+// 添加日志对象
+const log = {
+    error: function(message, ...args) {
+        console.error(`[ERROR] ${message}`, ...args);
+    }
+};
+
 app.post('/v1/chat/completions', async (req, res) => {
     try {
-        const {
-            messages,
-            model,
-            temperature = 0.7,
-            max_tokens = 8196,
-            top_p = 0.9,
-            stream = false
-        } = req.body;
+        // 1. 增加整体超时时间到 60 秒
+        res.setTimeout(60000, () => {
+            if (!res.headersSent) {
+                res.status(408).json({
+                    error: "请求超时",
+                    message: "Request timeout after 60s"
+                });
+            }
+        });
 
-        const actualModel = CUSTOMER_MODEL_MAP[model] || model;
-
-        if (!messages || !Array.isArray(messages) || !model) {
+        // 2. 请求体验证
+        if (!req.body) {
             return res.status(400).json({
-                error: "缺少必要参数或参数格式错误"
+                error: "请求体不能为空"
             });
         }
 
-        // 修改系统消息拼接逻辑
-        const systemMessageWithUserQuery = {
-            ...SYSTEM_MESSAGE,
-            content: SYSTEM_MESSAGE.content + " 请为以下行程制定攻略：" + messages[messages.length - 1].content
+        const data = req.body;
+        
+        if (!data.messages || !Array.isArray(data.messages) || data.messages.length === 0) {
+            return res.status(400).json({
+                error: "messages 参数必须是非空数组"
+            });
+        }
+
+        const model = CUSTOMER_MODEL_MAP[data.model] || data.model;
+        const temperature = data.temperature || 0.5;
+        const max_tokens = data.max_tokens || 2048;
+        const top_p = Math.min(Math.max(data.top_p || 0.7, 0.1), 0.9);
+        const stream = data.stream || false;
+
+        // 4. 优化系统预设消息
+        const systemMessage = {
+            role: 'system',
+            content: '你是一个旅行规划师，请根据用户需求提供简洁的旅行建议。'
         };
+        
+        // 5. 使用展开运算符创建新数组
+        let messages = [systemMessage, ...data.messages];
 
-        const fullMessages = [systemMessageWithUserQuery];
-
+        // 6. 构建请求体 - 修改请求格式以适应 HuggingFace API
         const requestBody = {
-            model: actualModel,
-            messages: fullMessages,
-            stream,
-            temperature: Math.min(Math.max(temperature, 0), 1),
-            max_tokens: Math.min(Math.max(max_tokens, 1), 8196),
-            top_p: Math.min(Math.max(top_p, 0.0001), 0.9999),
+            inputs: messages.map(msg => msg.content).join('\n'), // 将消息内容合并
+            parameters: {
+                temperature: temperature,
+                max_new_tokens: max_tokens,
+                top_p: top_p,
+                do_sample: true,
+                return_full_text: false
+            }
         };
 
-        const apiUrl = `https://api-inference.huggingface.co/models/${actualModel}/v1/chat/completions`;
-
-        const axiosConfig = {
-            headers: {
-                'Authorization': `Bearer ${HUGGINGFACE_API_KEY}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'Accept-Encoding': 'gzip, deflate, br'
-            },
-            responseType: stream ? 'stream' : 'json',
-            validateStatus: status => status < 500,
-        };
-
-        if (USE_PROXY && httpsAgent) {
-            axiosConfig.httpsAgent = httpsAgent;
-            axiosConfig.proxy = false;
-        }
+        // 7. 构建 API URL
+        const apiUrl = `https://api-inference.huggingface.co/models/${model}`;
         
-        console.log('Request Body:', requestBody);
+        console.log('开始请求 API:', apiUrl);
+        console.log('请求参数:', JSON.stringify(requestBody, null, 2));
 
-        const response = await axiosInstance.post(apiUrl, requestBody, axiosConfig);
-        console.log('API Response:', response.data);
+        // 8. 实现优化的重试机制
+        let retries = 2;
+        let lastError = null;
         
-        if (response.status !== 200) {
-            throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+        while (retries >= 0) {
+            try {
+                console.log(`尝试请求 API (剩余重试次数: ${retries})`);
+                
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${HUGGINGFACE_API_KEY}`
+                    },
+                    body: JSON.stringify(requestBody),
+                    agent: new HttpsProxyAgent('http://127.0.0.1:7890'),
+                    timeout: 30000
+                });
+
+                if (response.ok) {
+                    const responseData = await response.json();
+                    // 格式化响应以匹配 OpenAI 格式
+                    const formattedResponse = {
+                        choices: [{
+                            message: {
+                                role: 'assistant',
+                                content: Array.isArray(responseData) ? responseData[0].generated_text : responseData.generated_text
+                            }
+                        }],
+                        model: data.model,
+                        usage: {
+                            total_tokens: 0 // HuggingFace API 不提供 token 计数
+                        }
+                    };
+                    console.log('API 请求成功');
+                    return res.json(formattedResponse);
+                }
+
+                lastError = new Error(`API call failed with status ${response.status}`);
+                console.error(`API 请求失败 (状态码: ${response.status})`);
+                
+            } catch (error) {
+                lastError = error;
+                console.error('API 请求出错:', error.message);
+            }
+
+            retries--;
+            if (retries >= 0) {
+                const waitTime = 2000;
+                console.log(`等待 ${waitTime/1000} 秒后重试...`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+            }
         }
 
-        if (stream) {
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            response.data.pipe(res);
-        } else {
-            res.json(response.data);
-        }
+        throw lastError || new Error('Maximum retries reached');
 
     } catch (error) {
-        console.error('Error details:', {
-            message: error.message,
-            code: error.code,
-            response: error.response?.data,
-        });
-
-        let errorMessage = '请求处理失败';
-        if (error.code === 'ETIMEDOUT') {
-            errorMessage = 'API 请求超时，请检查网络连接';
-        } else if (error.code === 'ECONNREFUSED') {
-            errorMessage = USE_PROXY ?
-                '代理服务器连接失败，请检查代理设置或关闭代理' :
-                'API 连接失败，请检查网络设置';
-        } else if (error.response?.data) {
-            errorMessage = `API错误: ${JSON.stringify(error.response.data)}`;
-        } else {
-            errorMessage = error.message;
-        }
-
-        res.status(error.response?.status || 500).json({
-            error: errorMessage,
-            details: error.response?.data || error.message
+        console.error('Error details:', error);
+        res.status(500).json({
+            error: `请求处理失败: ${error.message}`,
+            details: error.stack
         });
     }
 });
 
-// 创建HTTP服务器用于重定向
-const httpServer = http.createServer((req, res) => {
-    // 处理 Let's Encrypt 验证
-    if (req.url.startsWith('/.well-known/acme-challenge/')) {
-        const challengePath = path.join('C:\\win-acme\\httpchallenges', req.url);
-        fs.readFile(challengePath, (err, data) => {
-            if (err) {
-                res.writeHead(404);
-                res.end();
-                return;
-            }
-            res.writeHead(200, { 'Content-Type': 'text/plain' });
-            res.end(data);
-        });
-        return;
-    }
-
-    // 其他所有HTTP请求重定向到HTTPS
-    res.writeHead(301, {
-        'Location': 'https://' + req.headers.host + req.url
-    });
-    res.end();
-});
-
-// 启动服务器
-const HTTP_PORT = 80;
-const HTTPS_PORT = 443;
-
-// 启动HTTP服务器
-httpServer.listen(HTTP_PORT, () => {
-    console.log(`HTTP服务器运行在端口 ${HTTP_PORT}`);
-});
-
-// 如果HTTPS证书加载成功，启动HTTPS服务器
-if (httpsServer) {
-    httpsServer.listen(HTTPS_PORT, () => {
-        console.log(`HTTPS服务器运行在端口 ${HTTPS_PORT}`);
-        console.log(`代理状态: ${USE_PROXY ? '启用' : '禁用'}`);
-        if (USE_PROXY) {
-            console.log(`代理设置: ${PROXY_HOST}:${PROXY_PORT}`);
-        }
-    });
-} else {
-    console.log('HTTPS服务器未启动，仅运行HTTP服务');
-}
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-    console.error('Unhandled error:', err);
-    res.status(500).json({
-        error: "服务器内部错误",
-        message: err.message
-    });
-});
-
-// 404 handler
+// 404处理
 app.use((req, res) => {
-    res.status(404).json({
-        error: "接口不存在"
-    });
+    res.status(404).json({ error: "Not Found" });
+});
+
+// 创建HTTP服务器(80端口)并重定向至HTTPS
+http.createServer((req, res) => {
+    res.writeHead(301, { "Location": "https://" + req.headers['host'] + req.url });
+    res.end();
+}).listen(80, () => {
+    console.log('HTTP Server running on port 80');
+});
+
+// 创建HTTPS服务器(443端口)
+https.createServer(options, app).listen(443, () => {
+    console.log('HTTPS Server running on port 443');
 });
