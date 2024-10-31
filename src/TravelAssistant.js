@@ -117,22 +117,11 @@ const TravelAssistant = () => {
     const retryWithExponentialBackoff = async (retryCount) => {
       try {
         const response = await axios.post(
-          'https://leave0421.x1340128837.workers.dev/v1/chat/completions',
+          'http://43.138.200.215:3001/v1/chat/completions',
           {
             model: 'qwen2.5-72b-instruct',
             messages: [
-              { role: 'system', content: `你是专业旅行规划师。请为下列信息制定小红书风格攻略:
-                * 出发地
-                * 目的地
-                * 人数
-                * 天数
-                需包含:
-                1. 交通方式:最快2种交通方式、时间、价格
-                2. 住宿推荐:经济/舒适型各2-3家，含位置、价格，避开青年旅社
-                3. 景点打卡:5-8个重点景点介绍，含位置、价格
-                4. 美食打卡:5-8个特色推荐，含位置、价格
-                5. 具体日程:经济/舒适两版，含具体时间安排和具体行程内容安排，含位置、价格
-                6. 预算:两种方案总费用明细无需回复任何和旅行不相关的内容。` },
+
               { role: 'user', content: input }
             ],
             temperature: 0.7,
