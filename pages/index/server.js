@@ -1,4 +1,15 @@
 // 安装依赖: npm init -y && npm install express node-fetch http https https-proxy-agent node-cache p-queue
+// 要运行这个服务器，确保你的 package.json 中包含：
+// {
+//     "type": "commonjs",
+//     "dependencies": {
+//       "express": "latest",
+//       "node-fetch": "^2.6.1",
+//       "https-proxy-agent": "latest",
+//       "node-cache": "latest",
+//       "p-queue": "latest"
+//     }
+//   }
 const express = require('express');
 const http = require('http');
 const https = require('https');
