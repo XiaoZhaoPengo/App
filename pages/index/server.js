@@ -1,15 +1,5 @@
 // 安装依赖: npm init -y && npm install express node-fetch http https https-proxy-agent node-cache p-queue
-// 要运行这个服务器，确保你的 package.json 中包含：
-// {
-//     "type": "commonjs",
-//     "dependencies": {
-//       "express": "latest",
-//       "node-fetch": "^2.6.1",
-//       "https-proxy-agent": "latest",
-//       "node-cache": "latest",
-//       "p-queue": "latest"
-//     }
-//   }
+// 安装新增依赖: npm install compression
 const express = require('express');
 const http = require('http');
 const https = require('https');
@@ -17,44 +7,51 @@ const fs = require('fs');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const fetch = require('node-fetch');
 const NodeCache = require('node-cache');
+const path = require('path');
+const compression = require('compression');
 
-// 使用异步立即执行函数来启动服务器
 (async () => {
-    // 动态导入 p-queue
     const { default: PQueue } = await import('p-queue');
     
     const app = express();
+    
+    // 1. 添加响应压缩
+    app.use(compression());
+    
+    app.use(express.static(path.join(__dirname,'public')))
 
-    // 初始化缓存，设置TTL为10分钟
+    // 2. 优化缓存配置
     const cache = new NodeCache({ 
-        stdTTL: 600,
-        checkperiod: 120
+        stdTTL: 3600, // 增加缓存时间到1小时
+        checkperiod: 600, // 减少检查周期到10分钟
+        useClones: false, // 禁用克隆以提升性能
+        deleteOnExpire: true // 过期立即删除
     });
 
-    // 初始化请求队列，限制并发请求数
+    // 3. 优化请求队列配置
     const queue = new PQueue({
-        concurrency: 2, // 同时处理的最大请求数
-        interval: 1000, // 间隔时间
-        intervalCap: 2  // 在间隔时间内允许的最大请求数
+        concurrency: 5, // 增加并发数
+        interval: 1000,
+        intervalCap: 5,
+        timeout: 300000, // 添加队列超时时间
+        throwOnTimeout: true
     });
 
-    // 添加 JSON 解析中间件
+    // 4. 优化JSON解析
     app.use(express.json({ 
         limit: '50mb',
-        strict: true
+        strict: true,
+        inflate: true,
+        type: ['application/json', 'text/plain'] // 支持更多Content-Type
     }));
 
-    // API Keys
+    // 保持原有配置不变
     const API_KEY = "sk-1234567890";
     const HUGGINGFACE_API_KEY = "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";
-
-    // SSL证书配置
     const options = {
         key: fs.readFileSync('./pem/www.leavel.top.key'),
         cert: fs.readFileSync('./pem/www.leavel.top.pem')
     };
-
-    // 可用模型映射
     const CUSTOMER_MODEL_MAP = {
         "qwen2.5-72b-instruct": "Qwen/Qwen2.5-72B-Instruct",
         "gemma2-2b-it": "google/gemma-2-2b-it", 
@@ -64,25 +61,41 @@ const NodeCache = require('node-cache');
         "llama-3.2-3b-instruct": "meta-llama/Llama-3.2-3B-Instruct",
         "phi-3.5": "microsoft/Phi-3.5-mini-instruct"
     };
-
-    // 系统预设消息模板
     const SYSTEM_PROMPT = {
         role: 'system',
-        content: `作为旅行规划师，提供以下要点：交通路线、住宿推荐、主要景点、特色美食、行程安排和预算估算。注重实用信息，简明扼要。`
+        content: `你是专业旅行规划师。:
+
+            请为下列出发地,目的地,人数,天数 信息制定小红书风格攻略`
     };
 
-    // 缓存键生成函数
+    // 5. 优化消息处理函数
+    const processMessages = (messages) => {
+        if (!Array.isArray(messages)) {
+            throw new Error("messages must be an array");
+        }
+        return messages[0]?.role !== 'system' ? [SYSTEM_PROMPT, ...messages] : messages;
+    };
+
+    // 6. 优化缓存键生成
     const generateCacheKey = (messages, model) => {
-        const messageString = JSON.stringify(messages);
+        const messageString = JSON.stringify(messages.map(m => ({
+            role: m.role,
+            content: m.content
+        })));
         return `${model}_${Buffer.from(messageString).toString('base64')}`;
     };
 
-    // CORS 中间件
+    // 7. 优化CORS中间件
     app.use((req, res, next) => {
-        res.header("Access-Control-Allow-Origin", "*");
-        res.header("Access-Control-Allow-Methods", "*");
-        res.header("Access-Control-Allow-Headers", "*");
-        res.header("Access-Control-Max-Age", "86400");
+        const allowedOrigins = ['*']; // 可以改为具体域名列表
+        const origin = req.headers.origin;
+        
+        if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+            res.header("Access-Control-Allow-Origin", origin);
+            res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+            res.header("Access-Control-Allow-Headers", "Content-Type,Authorization");
+            res.header("Access-Control-Max-Age", "86400");
+        }
         
         if (req.method === "OPTIONS") {
             return res.status(200).end();
@@ -90,174 +103,152 @@ const NodeCache = require('node-cache');
         next();
     });
 
-    // 增强的日志处理
+    // 8. 优化日志处理
     const log = {
-        error: function(message, ...args) {
-            console.error(`[ERROR ${new Date().toISOString()}] ${message}`, ...args);
-        },
-        info: function(message, ...args) {
-            console.log(`[INFO ${new Date().toISOString()}] ${message}`, ...args);
-        },
-        debug: function(message, ...args) {
-            if (process.env.NODE_ENV !== 'production') {
-                console.log(`[DEBUG ${new Date().toISOString()}] ${message}`, ...args);
-            }
+        error: (message, ...args) => console.error(`[ERROR ${new Date().toISOString()}] ${message}`, ...args),
+        info: (message, ...args) => console.log(`[INFO ${new Date().toISOString()}] ${message}`, ...args),
+        debug: (message, ...args) => process.env.NODE_ENV !== 'production' && console.log(`[DEBUG ${new Date().toISOString()}] ${message}`, ...args)
+    };
+
+    // 9. 优化响应超时处理
+    const handleResponseWithTimeout = async (promise, timeoutMs = 30000) => {
+        let timeoutHandle;
+        
+        try {
+            const timeoutPromise = new Promise((_, reject) => {
+                timeoutHandle = setTimeout(() => reject(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
+            });
+            
+            return await Promise.race([promise, timeoutPromise]);
+        } finally {
+            clearTimeout(timeoutHandle);
         }
     };
 
-    // 性能监控中间件
+    // 10. 优化API调用函数
+    async function callHuggingFaceAPI(apiUrl, fetchOptions, retries = 3) {
+        const backoff = (attempt) => Math.min(1000 * Math.pow(2, attempt), 10000);
+        
+        for (let i = 0; i < retries; i++) {
+            try {
+                const response = await handleResponseWithTimeout(
+                    fetch(apiUrl, {
+                        ...fetchOptions,
+                        timeout: 60000 // 1分钟超时
+                    }),
+                    60000
+                );
+
+                if (response.ok) {
+                    const result = await response.json();
+                    if (!result?.choices?.[0]?.message) {
+                        throw new Error("Invalid API response format");
+                    }
+                    return result;
+                }
+
+                const errorText = await response.text();
+                throw new Error(`API responded with status ${response.status}: ${errorText}`);
+            } catch (error) {
+                if (i === retries - 1) throw error;
+                
+                const waitTime = backoff(i);
+                log.info(`Attempt ${i + 1} failed, waiting ${waitTime}ms before retry`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+            }
+        }
+    }
+
+    // 11. 优化性能监控中间件
     const performanceMiddleware = (req, res, next) => {
         const start = Date.now();
-        // 添加请求参数日志
-        log.info(`请求参数: ${JSON.stringify(req.body)}`);
-        
-        res.on('finish', () => {
+        const logFinish = () => {
             const duration = Date.now() - start;
             log.info(`${req.method} ${req.originalUrl} completed in ${duration}ms`);
-        });
+        };
+        
+        res.on('finish', logFinish);
+        res.on('close', logFinish);
         next();
     };
 
     app.use(performanceMiddleware);
 
-    // API路由配置
+    // 保持原有路由
+    app.get('/', (req, res) => {
+        res.sendFile(path.resolve(__dirname, './public/index.html'));
+    });
+
     app.get('/v1/models', (req, res) => {
-        const arrs = Object.keys(CUSTOMER_MODEL_MAP).map(element => ({ 
-            id: element, 
+        const models = Object.keys(CUSTOMER_MODEL_MAP).map(id => ({ 
+            id, 
             object: "model" 
         }));
         res.json({
-            data: arrs,
+            data: models,
             success: true
         });
     });
 
-    // API调用函数
-    async function callHuggingFaceAPI(apiUrl, fetchOptions, retries = 3) {
-        let lastError;
-        for (let i = 0; i < retries; i++) {
-            try {
-                const response = await fetch(apiUrl, fetchOptions);
-                if (response.ok) {
-                    return await response.json();
-                }
-                lastError = new Error(`API responded with status ${response.status}`);
-            } catch (error) {
-                lastError = error;
-                if (i < retries - 1) {
-                    const waitTime = (i + 1) * 3000;
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
-                }
-            }
-        }
-        throw lastError;
-    }
-
-    // 主要API处理函数
+    // 12. 优化主要API处理函数
     app.post('/v1/chat/completions', async (req, res) => {
         const startTime = Date.now();
         
         try {
-            log.info('Received chat completion request');
-            
-            // 添加详细的请求参数日志
-            log.info('Request parameters:', {
-                model: req.body.model,
-                temperature: req.body.temperature,
-                max_tokens: req.body.max_tokens,
-                messages_count: req.body?.messages?.length
-            });
-            
-            // 1. 输入验证
-            if (!req.body) {
-                return res.status(400).json({ error: "请求体不能为空" });
-            }
-
-            const data = req.body;
-            
-            if (!data.messages || !Array.isArray(data.messages) || data.messages.length === 0) {
+            // 快速参数验证
+            if (!req.body?.messages?.length) {
                 return res.status(400).json({ error: "messages 参数必须是非空数组" });
             }
 
-            // 2. 参数处理
-            const model = CUSTOMER_MODEL_MAP[data.model] || data.model;
-            const temperature = data.temperature || 0.7;
-            const max_tokens = data.max_tokens || 8196;
-            const top_p = Math.min(Math.max(data.top_p || 0.9, 0.0001), 0.9999);
-            const stream = data.stream || false;
+            const {
+                model = '',
+                temperature = 0.7,
+                max_tokens = 8196,
+                top_p = 0.9,
+                stream = false
+            } = req.body;
 
-            // 3. 消息处理 - 添加系统提示
-            let messages = [SYSTEM_PROMPT, ...data.messages];
+            const processedMessages = processMessages(req.body.messages);
+            const cacheKey = generateCacheKey(processedMessages, model);
             
-            // 4. 检查缓存
-            const cacheKey = generateCacheKey(messages, model);
+            // 检查缓存
             const cachedResponse = cache.get(cacheKey);
-            
             if (cachedResponse) {
-                log.info(`Cache hit for key: ${cacheKey}`);
-                const duration = Date.now() - startTime;
-                log.info(`Request served from cache in ${duration}ms`);
                 return res.json(cachedResponse);
             }
 
-            // 5. 构建请求
-            const requestBody = {
-                model: model,
-                stream: stream,
-                temperature: temperature,
-                max_tokens: max_tokens,
-                top_p: top_p,
-                messages: messages
-            };
-
-            const apiUrl = `https://api-inference.huggingface.co/models/${model}/v1/chat/completions`;
+            const modelName = CUSTOMER_MODEL_MAP[model] || model;
+            const apiUrl = `https://api-inference.huggingface.co/models/${modelName}/v1/chat/completions`;
             
-            // 6. 设置请求配置
             const fetchOptions = {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${HUGGINGFACE_API_KEY}`,
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'Accept-Encoding': 'gzip,deflate'
                 },
-                body: JSON.stringify(requestBody),
+                body: JSON.stringify({
+                    model: modelName,
+                    stream,
+                    temperature,
+                    max_tokens,
+                    top_p,
+                    messages: processedMessages
+                }),
                 agent: new HttpsProxyAgent('http://127.0.0.1:7890'),
-                timeout: 180000 // 180秒超时
+                compress: true
             };
 
-            // 7. 将请求添加到队列
-            const queuedRequest = async () => {
-                log.info('Processing request in queue');
-                const response = await callHuggingFaceAPI(apiUrl, fetchOptions);
-                
-                if (!response || !response.choices) {
-                    throw new Error("API 返回的数据格式不正确");
-                }
+            const result = await queue.add(
+                () => callHuggingFaceAPI(apiUrl, fetchOptions),
+                { priority: 1 }
+            );
 
-                // 记录API响应日志
-                log.info('API Response received:', {
-                    status: 'success',
-                    choices_length: response.choices.length
-                });
-
-                // 缓存响应
-                cache.set(cacheKey, response);
-                
-                return response;
-            };
-
-            // 8. 执行队列任务
-            const result = await queue.add(queuedRequest);
-            
-            // 9. 发送响应
-            const duration = Date.now() - startTime;
-            log.info(`Request completed successfully in ${duration}ms`);
-            
+            cache.set(cacheKey, result);
             res.json(result);
 
         } catch (error) {
-            const duration = Date.now() - startTime;
-            log.error(`Request failed after ${duration}ms:`, error);
-            
+            log.error(`Request failed after ${Date.now() - startTime}ms:`, error);
             res.status(500).json({
                 error: `请求处理失败: ${error.message}`,
                 details: process.env.NODE_ENV === 'development' ? error.stack : undefined
@@ -265,12 +256,11 @@ const NodeCache = require('node-cache');
         }
     });
 
-    // 404处理
+    // 保持原有的错误处理
     app.use((req, res) => {
         res.status(404).json({ error: "Not Found" });
     });
 
-    // 错误处理中间件
     app.use((err, req, res, next) => {
         log.error('Unhandled error:', err);
         res.status(500).json({
@@ -279,27 +269,29 @@ const NodeCache = require('node-cache');
         });
     });
 
-    // 创建HTTP服务器(80端口)并重定向至HTTPS
+    // 创建服务器
     http.createServer((req, res) => {
         res.writeHead(301, { "Location": "https://" + req.headers['host'] + req.url });
         res.end();
-    }).listen(80, () => {
-        log.info('HTTP Server running on port 80');
-    });
+    }).listen(80, () => log.info('HTTP Server running on port 80'));
 
-    // 创建HTTPS服务器(443端口)
     const server = https.createServer(options, app).listen(443, () => {
         log.info('HTTPS Server running on port 443');
     });
 
-    // 优雅退出处理
-    process.on('SIGTERM', () => {
-        log.info('SIGTERM received. Closing servers...');
+    // 优化优雅退出处理
+    const gracefulShutdown = () => {
+        log.info('Received shutdown signal');
         server.close(() => {
-            log.info('Server closed. Exiting process.');
+            log.info('Server closed');
+            cache.close();
             process.exit(0);
         });
-    });
+    };
+
+    process.on('SIGTERM', gracefulShutdown);
+    process.on('SIGINT', gracefulShutdown);
+
 })().catch(error => {
     console.error('Server initialization failed:', error);
     process.exit(1);
