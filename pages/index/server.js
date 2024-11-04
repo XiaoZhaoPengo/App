@@ -171,7 +171,7 @@ const checkSSLCertificates = () => {
                             ...options,
                             signal: controller.signal,
                             compress: true,
-                            timeout: 10000
+                            timeout: 60000
                         });
                         
                         if (!response.ok) {
@@ -238,7 +238,7 @@ const checkSSLCertificates = () => {
                     }),
                     agent: new HttpsProxyAgent('http://127.0.0.1:7890'),
                     compress: true,
-                    timeout: 100000
+                    timeout: 600000
                 };
 
                 const result = await queue.add(
