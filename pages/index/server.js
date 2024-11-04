@@ -12,18 +12,23 @@ const compression = require('compression');
 const cluster = require('cluster');
 const os = require('os');
 
-// Redis配置
+// Redis配置优化
 const redisConfig = {
     host: '127.0.0.1',
     port: 6379,
-    password: '', // 如果有密码请设置
+    password: '', 
     retryStrategy: (times) => {
         const delay = Math.min(times * 50, 2000);
         return delay;
-    }
+    },
+    // 添加连接优化
+    connectTimeout: 10000,
+    maxRetriesPerRequest: 3,
+    enableReadyCheck: true,
+    autoResendUnfulfilledCommands: true
 };
 
-// 优化日志函数
+// 日志函数保持不变
 const log = {
     info: (...args) => console.log(`[INFO ${new Date().toISOString()}]`, ...args),
     error: (...args) => console.error(`[ERROR ${new Date().toISOString()}]`, ...args),
@@ -31,7 +36,7 @@ const log = {
     perf: (...args) => console.log(`[PERF ${new Date().toISOString()}]`, ...args)
 };
 
-// 优化证书检查函数
+// SSL证书检查函数保持不变
 const checkSSLCertificates = () => {
     const certPath = './pem/www.leavel.top.pem';
     const keyPath = './pem/www.leavel.top.key';
@@ -49,23 +54,20 @@ const checkSSLCertificates = () => {
     }
 };
 
-// 集群模式处理
+// 集群模式处理保持不变
 if (cluster.isMaster) {
     const numCPUs = os.cpus().length;
     log.info(`主进程 ${process.pid} 正在运行`);
 
-    // 启动工作进程
     for (let i = 0; i < numCPUs; i++) {
         cluster.fork();
     }
 
     cluster.on('exit', (worker, code, signal) => {
         log.error(`工作进程 ${worker.process.pid} 已退出`);
-        // 重启工作进程
         cluster.fork();
     });
 } else {
-    // 工作进程代码
     (async () => {
         const { default: PQueue } = await import('p-queue');
         
@@ -76,43 +78,44 @@ if (cluster.isMaster) {
         redisClient.on('error', (err) => log.error('Redis错误:', err));
         redisClient.on('connect', () => log.info('Redis连接成功'));
 
-        // 内存缓存初始化
+        // 优化内存缓存配置
         const memoryCache = new NodeCache({ 
-            stdTTL: 1800,
-            checkperiod: 300,
+            stdTTL: 3600, // 增加缓存时间到1小时
+            checkperiod: 600,
             useClones: false,
             deleteOnExpire: true,
-            maxKeys: 1000
+            maxKeys: 5000 // 增加缓存容量
         });
 
-        // 压缩配置
+        // 压缩配置优化
         app.use(compression({
-            level: 7,
-            threshold: 1024,
+            level: 6, // 调整压缩级别平衡性能
+            threshold: 512, // 降低压缩阈值
             filter: (req, res) => {
                 if (req.headers['x-no-compression']) return false;
                 return compression.filter(req, res);
-            },
-            strategy: compression.Z_RLE
+            }
         }));
         
+        // 静态文件服务优化
         app.use(express.static(path.join(__dirname,'public'), {
-            maxAge: '1d',
-            etag: true
+            maxAge: '7d', // 增加缓存时间
+            etag: true,
+            lastModified: true
         }));
 
-        // 请求队列配置
+        // 优化请求队列配置
         const queue = new PQueue({
-            concurrency: 15,
+            concurrency: 30, // 增加并发数
             interval: 1000,
-            intervalCap: 15,
-            timeout: 60000,
+            intervalCap: 30, // 增加间隔容量
+            timeout: 30000, // 减少超时时间
             throwOnTimeout: true,
             autoStart: true,
-            retries: 2
+            retries: 1 // 减少重试次数
         });
 
-        // JSON解析配置
+        // JSON解析配置保持不变
         app.use(express.json({ 
             limit: '5mb',
             strict: true,
@@ -138,9 +141,11 @@ if (cluster.isMaster) {
                 requestCert: false
             };
 
-            // API配置
+            // API配置保持不变
             const API_KEY = "sk-1234567890";
             const HUGGINGFACE_API_KEY = "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";
+            
+            // 模型映射保持不变
             const CUSTOMER_MODEL_MAP = {
                 "qwen2.5-72b-instruct": "Qwen/Qwen2.5-72B-Instruct",
                 "gemma2-2b-it": "google/gemma-2-2b-it",
@@ -156,7 +161,7 @@ if (cluster.isMaster) {
                 content: `你是专业旅行规划师。请为下列出发地,目的地,人数,天数 信息制定小红书风格攻略`
             };
 
-            // CORS配置
+            // CORS配置优化
             app.use((req, res, next) => {
                 res.header("Access-Control-Allow-Origin", "*");
                 res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
@@ -172,7 +177,7 @@ if (cluster.isMaster) {
                 next();
             });
 
-            // 消息处理
+            // 消息处理保持不变
             const processMessages = (messages) => {
                 if (!Array.isArray(messages)) {
                     throw new Error("messages必须是数组");
@@ -184,19 +189,19 @@ if (cluster.isMaster) {
                 return cleanedMessages[0]?.role !== 'system' ? [SYSTEM_PROMPT, ...cleanedMessages] : cleanedMessages;
             };
 
-            // 缓存键生成
+            // 优化缓存键生成
             const generateCacheKey = (messages, model) => {
                 const messageString = JSON.stringify(messages.map(m => ({
                     role: m.role,
-                    content: m.content
+                    content: m.content.substring(0, 100) // 只使用内容前100个字符
                 })));
                 return `${model}_${Buffer.from(messageString).toString('base64')}`;
             };
 
-            // API调用函数
-            const callHuggingFaceAPI = async (url, options, retries = 2) => {
+            // 优化API调用函数
+            const callHuggingFaceAPI = async (url, options, retries = 1) => {
                 const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 100000);
+                const timeout = setTimeout(() => controller.abort(), 30000); // 减少超时时间
 
                 try {
                     for (let i = 0; i <= retries; i++) {
@@ -205,7 +210,7 @@ if (cluster.isMaster) {
                                 ...options,
                                 signal: controller.signal,
                                 compress: true,
-                                timeout: 60000
+                                timeout: 25000 // 减少请求超时时间
                             });
                             
                             if (!response.ok) {
@@ -215,7 +220,7 @@ if (cluster.isMaster) {
                             return await response.json();
                         } catch (error) {
                             if (i === retries) throw error;
-                            await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+                            await new Promise(resolve => setTimeout(resolve, 500 * (i + 1))); // 减少重试等待时间
                         }
                     }
                 } finally {
@@ -223,21 +228,16 @@ if (cluster.isMaster) {
                 }
             };
 
-            // 双重缓存检查函数
+            // 优化缓存检查函数
             const checkCache = async (cacheKey) => {
-                // 先检查内存缓存
                 const memResult = memoryCache.get(cacheKey);
                 if (memResult) {
-                    log.debug('命中内存缓存');
                     return { data: memResult, source: 'memory' };
                 }
 
-                // 检查Redis缓存
                 const redisResult = await redisClient.get(cacheKey);
                 if (redisResult) {
-                    log.debug('命中Redis缓存');
                     const parsed = JSON.parse(redisResult);
-                    // 写入内存缓存
                     memoryCache.set(cacheKey, parsed);
                     return { data: parsed, source: 'redis' };
                 }
@@ -245,15 +245,25 @@ if (cluster.isMaster) {
                 return null;
             };
 
-            // 写入双重缓存
+            // 优化缓存写入
             const setCache = async (cacheKey, data) => {
-                // 写入内存缓存
                 memoryCache.set(cacheKey, data);
-                // 写入Redis缓存
-                await redisClient.set(cacheKey, JSON.stringify(data), 'EX', 1800);
+                await redisClient.set(cacheKey, JSON.stringify(data), 'EX', 3600); // 增加缓存时间到1小时
             };
 
-            // 主API路由
+            // 优化代理配置
+            const proxyAgent = new HttpsProxyAgent({
+                host: '127.0.0.1',
+                port: 7890,
+                timeout: 25000,
+                keepAlive: true,
+                keepAliveMsecs: 1000,
+                maxSockets: 100,
+                maxFreeSockets: 10,
+                scheduling: 'lifo'
+            });
+
+            // 主API路由优化
             app.post('/v1/chat/completions', async (req, res) => {
                 const startTime = Date.now();
                 
@@ -273,7 +283,6 @@ if (cluster.isMaster) {
                     const processedMessages = processMessages(req.body.messages);
                     const cacheKey = generateCacheKey(processedMessages, model);
                     
-                    // 检查缓存
                     const cachedResult = await checkCache(cacheKey);
                     if (cachedResult) {
                         res.setHeader('X-Cache', `HIT-${cachedResult.source}`);
@@ -300,9 +309,9 @@ if (cluster.isMaster) {
                             top_p,
                             messages: processedMessages
                         }),
-                        agent: new HttpsProxyAgent('http://127.0.0.1:7890'),
+                        agent: proxyAgent,
                         compress: true,
-                        timeout: 600000
+                        timeout: 25000
                     };
 
                     const result = await queue.add(
@@ -310,14 +319,11 @@ if (cluster.isMaster) {
                         { priority: 1 }
                     );
 
-                    // 写入缓存
                     await setCache(cacheKey, result);
                     
-                    // 设置响应头
                     res.setHeader('X-Response-Time', `${Date.now() - startTime}ms`);
                     res.json(result);
 
-                    // 记录性能指标
                     log.perf(`请求处理完成, 耗时: ${Date.now() - startTime}ms`);
 
                 } catch (error) {
@@ -329,7 +335,7 @@ if (cluster.isMaster) {
                 }
             });
 
-            // 错误处理中间件
+            // 错误处理中间件保持不变
             app.use((req, res) => {
                 res.status(404).json({ error: "接口不存在" });
             });
@@ -342,7 +348,7 @@ if (cluster.isMaster) {
                 });
             });
 
-            // HTTP服务器(重定向到HTTPS)
+            // HTTP服务器保持不变
             const httpServer = http.createServer((req, res) => {
                 const httpsUrl = `https://${req.headers.host}${req.url}`;
                 res.writeHead(301, { 
@@ -352,10 +358,10 @@ if (cluster.isMaster) {
                 res.end();
             });
 
-            // HTTPS服务器
+            // HTTPS服务器保持不变
             const httpsServer = https.createServer(sslOptions, app);
             
-            // 错误处理
+            // 错误处理保持不变
             const handleServerError = (server, error) => {
                 log.error(`服务器错误: ${error.message}`);
                 if (error.code === 'EADDRINUSE') {
@@ -378,7 +384,7 @@ if (cluster.isMaster) {
                 log.info(`工作进程 ${process.pid} - HTTPS服务器运行在端口 443`);
             });
 
-            // 优雅退出处理
+            // 优雅退出处理保持不变
             const gracefulShutdown = async (signal) => {
                 log.info(`收到关闭信号: ${signal}`);
                 
@@ -412,3 +418,15 @@ if (cluster.isMaster) {
         process.exit(1);
     });
 }
+
+// 全局未捕获异常处理
+process.on('uncaughtException', (error) => {
+    log.error('未捕获的异常:', error);
+    setTimeout(() => {
+        process.exit(1);
+    }, 1000);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    log.error('未处理的Promise拒绝:', reason);
+});
