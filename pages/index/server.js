@@ -106,13 +106,13 @@ if (cluster.isMaster) {
 
         // 优化请求队列配置
         const queue = new PQueue({
-            concurrency: 30, // 增加并发数
+            concurrency: 20, // 降低并发数
             interval: 1000,
-            intervalCap: 30, // 增加间隔容量
-            timeout: 30000, // 减少超时时间
-            throwOnTimeout: true,
+            intervalCap: 20,
+            timeout: 60000, // 增加超时时间到60秒
+            throwOnTimeout: false, // 超时不抛出错误
             autoStart: true,
-            retries: 1 // 减少重试次数
+            retries: 2 // 增加重试次数
         });
 
         // JSON解析配置保持不变
@@ -199,9 +199,9 @@ if (cluster.isMaster) {
             };
 
             // 优化API调用函数
-            const callHuggingFaceAPI = async (url, options, retries = 1) => {
+            const callHuggingFaceAPI = async (url, options, retries = 2) => {
                 const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 30000); // 减少超时时间
+                const timeout = setTimeout(() => controller.abort(), 55000); // 增加超时时间
 
                 try {
                     for (let i = 0; i <= retries; i++) {
@@ -210,7 +210,7 @@ if (cluster.isMaster) {
                                 ...options,
                                 signal: controller.signal,
                                 compress: true,
-                                timeout: 25000 // 减少请求超时时间
+                                timeout: 50000 // 增加请求超时时间
                             });
                             
                             if (!response.ok) {
@@ -220,7 +220,7 @@ if (cluster.isMaster) {
                             return await response.json();
                         } catch (error) {
                             if (i === retries) throw error;
-                            await new Promise(resolve => setTimeout(resolve, 500 * (i + 1))); // 减少重试等待时间
+                            await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // 增加重试等待时间
                         }
                     }
                 } finally {
@@ -327,7 +327,7 @@ if (cluster.isMaster) {
                     log.perf(`请求处理完成, 耗时: ${Date.now() - startTime}ms`);
 
                 } catch (error) {
-                    log.error(`请求处理失败 (${Date.now() - startTime}ms):`, error);
+                    log.error(`请��处理失败 (${Date.now() - startTime}ms):`, error);
                     res.status(500).json({
                         error: `请求处理失败: ${error.message}`,
                         details: process.env.NODE_ENV === 'development' ? error.stack : undefined
