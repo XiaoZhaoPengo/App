@@ -104,14 +104,15 @@ if (cluster.isMaster) {
             lastModified: true
         }));
 
-        // 修改队列配置
+        // 优化请求队列配置
         const queue = new PQueue({
-            concurrency: 10,  // 降低并发数
+            concurrency: 30, // 增加并发数
             interval: 1000,
-            intervalCap: 10,
-            timeout: 60000,   // 增加超时时间到60秒
-            throwOnTimeout: false,
-            autoStart: true
+            intervalCap: 30, // 增加间隔容量
+            timeout: 30000, // 减少超时时间
+            throwOnTimeout: true,
+            autoStart: true,
+            retries: 1 // 减少重试次数
         });
 
         // JSON解析配置保持不变
@@ -157,7 +158,7 @@ if (cluster.isMaster) {
 
             const SYSTEM_PROMPT = {
                 role: 'system',
-                content: `你是专业旅行规划师。请根据出发地,目的地,人数,天数 信息制定小红书风格攻略。内容需要合理且详细，必须包含价格和详细位置。内容最后需要加上旅行小贴士。无需回复和旅行的无关问题。`
+                content: `你是专业旅行规划师。请为下列出发地,目的地,人数,天数 信息制定小红书风格攻略`
             };
 
             // CORS配置优化
@@ -197,33 +198,34 @@ if (cluster.isMaster) {
                 return `${model}_${Buffer.from(messageString).toString('base64')}`;
             };
 
-            // 修改 API 调用函数
-            const callHuggingFaceAPI = async (url, options) => {
-                let lastError;
-                for (let i = 0; i < 3; i++) {  // 最多重试3次
-                    try {
-                        const response = await fetch(url, {
-                            ...options,
-                            agent: proxyAgent,
-                            timeout: 60000,  // 增加超时时间到60秒
-                            compress: true
-                        });
+            // 优化API调用函数
+            const callHuggingFaceAPI = async (url, options, retries = 1) => {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 30000); // 减少超时时间
 
-                        if (!response.ok) {
-                            throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
-                        }
-
-                        const data = await response.json();
-                        return data;
-                    } catch (error) {
-                        lastError = error;
-                        log.error(`第${i + 1}次请求失败:`, error);
-                        if (i < 2) {  // 如果不是最后一次尝试，等待后重试
-                            await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1)));
+                try {
+                    for (let i = 0; i <= retries; i++) {
+                        try {
+                            const response = await fetch(url, {
+                                ...options,
+                                signal: controller.signal,
+                                compress: true,
+                                timeout: 25000 // 减少请求超时时间
+                            });
+                            
+                            if (!response.ok) {
+                                throw new Error(`API请求失败: ${response.statusText}`);
+                            }
+                            
+                            return await response.json();
+                        } catch (error) {
+                            if (i === retries) throw error;
+                            await new Promise(resolve => setTimeout(resolve, 500 * (i + 1))); // 减少重试等待时间
                         }
                     }
+                } finally {
+                    clearTimeout(timeout);
                 }
-                throw lastError;
             };
 
             // 优化缓存检查函数
@@ -249,14 +251,14 @@ if (cluster.isMaster) {
                 await redisClient.set(cacheKey, JSON.stringify(data), 'EX', 3600); // 增加缓存时间到1小时
             };
 
-            // 修改代理配置
+            // 优化代理配置
             const proxyAgent = new HttpsProxyAgent({
                 host: '127.0.0.1',
                 port: 7890,
-                timeout: 60000,    // 增加超时时间到60秒
+                timeout: 25000,
                 keepAlive: true,
                 keepAliveMsecs: 1000,
-                maxSockets: 50,    // 降低最大连接数
+                maxSockets: 100,
                 maxFreeSockets: 10,
                 scheduling: 'lifo'
             });
@@ -309,7 +311,7 @@ if (cluster.isMaster) {
                         }),
                         agent: proxyAgent,
                         compress: true,
-                        timeout: 60000
+                        timeout: 25000
                     };
 
                     const result = await queue.add(
